@@ -1,6 +1,6 @@
-import cbpro, json
+import alpaca_trade_api as tradeapi
+import json
 import time as tm
-from cbpro.cbpro_auth import get_auth_headers
 import matplotlib.pyplot as plt
 import numpy as np
 import datetime
@@ -10,7 +10,6 @@ import matplotlib.dates as dates
 from pymongo import MongoClient
 import threading
 import ast
-
 
 
 # TO DO
@@ -83,12 +82,7 @@ class Penalty:
         print("current median:", self.current_median)
         print("grace points:", self.grace_points)
         print("---------------\n\n\n")
-
-        
-
-
-
-
+       
         
     def increase_grace_points(self):
         self.grace_points = self.grace_points + self.grace_step
@@ -206,6 +200,24 @@ def truncate(f, n):
         return '{0:.{1}f}'.format(f, n)
     i, p, d = s.partition('.')
     return '.'.join([i, (d+'0'*n)[:n]])
+
+
+class AlpacaWebsocketClient:
+    def __init__(self, symbols):
+        self.conn = tradeapi.stream2.StreamConn(API_KEY, API_SECRET, BASE_URL)
+        self.symbols = symbols
+
+    async def on_quote(self, conn, channel, data):
+        print(f"Quote: {data}")
+
+    async def on_trade(self, conn, channel, data):
+        print(f"Trade: {data}")
+
+    def run(self):
+        for symbol in self.symbols:
+            self.conn.subscribe_quotes(self.on_quote, symbol)
+            self.conn.subscribe_trades(self.on_trade, symbol)
+        self.conn.run()
 
 
 class myWebsocketClient(cbpro.WebsocketClient):
@@ -535,7 +547,8 @@ class Board:
 
 class Portofolio:
     
-    def __init__(self, figure):
+    def __init__(self, figure, api):
+        self.api = api
         self.figure = figure
         self.rates = {}
         self.axes = self.figure.add_subplot(111, picker = 5)
@@ -676,10 +689,14 @@ class Portofolio:
         print ("issuing for buying: ", product_id, "size: ", size, "at price: ", price)
 #min hour day
         if test == False:
-            result = auth_client.buy(price=price, 
-                    size=size, 
-                    order_type='limit',
-                    product_id=product_id,time_in_force="GTT", cancel_after="day")
+            result = api.submit_order(
+                symbol=symbol,
+                qty=quantity,
+                side='buy',
+                type='limit',
+                limit_price=price,
+                time_in_force='gtc'
+        )
             print("result of order: {0}".format(result))
 
             
@@ -695,22 +712,22 @@ class Portofolio:
             size = truncate(size,3)
             print ("maximum order size to be", size)
         if test == False:
-            result = auth_client.sell(price=price, 
-                size=size, 
-                order_type='limit',
-                product_id=product_id)
+            result = api.submit_order(
+                symbol=symbol,
+                qty=quantity,
+                side='sell',
+                type='limit',
+                limit_price=price,
+                time_in_force='gtc'
+        )
             print("result of order: {0}".format(result))
             
-
-
-    
-
     def get_nth_day_before_today_historic_rates(self, coin, n):
         pastTime = datetime.datetime.now() - datetime.timedelta(days = n)
         pastTime = pastTime.isoformat()
         current_time =datetime.datetime.now().isoformat()
         print("past time is: ", pastTime)
-        rates = auth_client.get_product_historic_rates(product_id = coin, start = pastTime, end = current_time, granularity = 21600 )
+        rates = api.get_barset(symbol, timeframe, start=pasTime, end=current_time)
         self.rates = rates
         print("rates received")
         print("----------------")
@@ -729,9 +746,6 @@ class Portofolio:
                    db_ticks.insert_one(line)
                else:
                    print("tick exists in database, omitting")
-               
-    
-
                 
 
         print ("Coin: {0} rates: {1}".format(coin, self.rates[coin]))
@@ -915,28 +929,15 @@ def get_rates(*args, **kwargs):
     
 
 
-file = open(".\pass.txt", "r")
-contents = file.read()
-creds = ast.literal_eval(contents)
-file.close()
+# Load credentials from a file
+with open('credentials.json') as f:
+    creds = json.load(f)
 
-use_default_creds = "n"
-while use_default_creds not in ["y", "n"]:
-    use_default_creds = input ("Use default credentials (y/n) ?: ")
+API_KEY = creds['API_KEY']
+API_SECRET = creds['API_SECRET']
+BASE_URL = 'https://paper-api.alpaca.markets'  # Use 'https://api.alpaca.markets' for live trading
 
-
-if use_default_creds == "y":
-    # this is the api
-    b64secret = "xVTH2f2W9BDG3IQsAq/9qfTZ0HrzQV/rgHZuVvyY6RFQJ1hGspfuTdjnKWXp6lTIDwThm02Y0hlazpDub2F3kw=="
-    passphrase="0pliwep0l6t"
-    key="8b7bda4c23d10e7539576fd91cc014a3"
-else:
-    # this is the default
-    key = creds["key"]
-    b64secret = creds["b64secret"]
-    passphrase = creds["passphrase"]
-    auth_client = cbpro.AuthenticatedClient(key, b64secret, passphrase)
-
+api = tradeapi.REST(API_KEY, API_SECRET, BASE_URL, api_version='v2')
 
 # initiate database
 mongo_client = MongoClient('mongodb://localhost:27017/')
@@ -956,13 +957,14 @@ enable_movement = input ("enable movement (use it at your own risk) (y/n) ?: ")
 
 
 
-wsClient = myWebsocketClient(api_key = key, api_secret = b64secret, api_passphrase= passphrase, auth=True, channels=None, mongo_collection = db_ticks, should_print = False)
+#wsClient = myWebsocketClient(api_key = key, api_secret = b64secret, api_passphrase= passphrase, auth=True, channels=None, mongo_collection = db_ticks, should_print = False)
 
+wsCliennt = AlpacaWebsocketClient([coin])
 
 # all the elements will need the figure
 figure = plt.figure(figsize=(8,6))
 
-portofolio = Portofolio(figure)
+portofolio = Portofolio(figure, api)
 corridor  = Corridor(figure)
 penalty = Penalty()
 board = Board(figure)
