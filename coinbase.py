@@ -1,15 +1,29 @@
-import alpaca_trade_api as tradeapi
-import json
+from alpaca.data.historical import CryptoHistoricalDataClient
+from alpaca.data.requests import CryptoBarsRequest
+from alpaca.data.timeframe import TimeFrame
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.data.requests import CryptoLatestQuoteRequest
+from alpaca.data.live import CryptoDataStream
+
 import time as tm
 import matplotlib.pyplot as plt
 import numpy as np
 import datetime
-from websocket import create_connection, WebSocketConnectionClosedException
 from matplotlib.widgets import Button
 import matplotlib.dates as dates
 from pymongo import MongoClient
 import threading
 import ast
+import json
+
+# set them when the program starts, stream is used for the stream data
+# and history for the historic data
+stream = None
+history = None
+api = None
+messageList = []
 
 
 # TO DO
@@ -141,15 +155,11 @@ class Penalty:
             
         if self.current_price < self.lanes_median and order!=None and order["side"] == "sell":
             print("current price very low for a sell order")
-            self.increase_penalty_upper_lane()
-            
+            self.increase_penalty_upper_lane()          
             
         self.total_penalty_points = self.upper_lane_penalty_points + self.lower_lane_penalty_points - self.grace_points
 
-
-
-
-            
+           
         if (current_price >= self.lower_lane_y and current_price <= self.upper_lane_y): # shrink
         
             while (order and order["side"] == "buy" and  self.lower_lane_penalty_points > 0 and self.lower_lane_y < current_price *0.90):
@@ -184,12 +194,8 @@ class Penalty:
                 self.lower_lane_penalty_points = 0
               
         print ("#####################################################################")
-   
-            
         
-        
-    
-        
+         
 #class Move:
 #    def move_upper_
 
@@ -202,7 +208,7 @@ def truncate(f, n):
     return '.'.join([i, (d+'0'*n)[:n]])
 
 
-class AlpacaWebsocketClient:
+class AlpacaWebsocketClient():
     def __init__(self, symbols):
         self.conn = tradeapi.stream2.StreamConn(API_KEY, API_SECRET, BASE_URL)
         self.symbols = symbols
@@ -218,75 +224,6 @@ class AlpacaWebsocketClient:
             self.conn.subscribe_quotes(self.on_quote, symbol)
             self.conn.subscribe_trades(self.on_trade, symbol)
         self.conn.run()
-
-
-class myWebsocketClient(cbpro.WebsocketClient):
-        
-    def on_open(self):
-        print("opening socket")
-        self.url = "wss://ws-feed.pro.coinbase.com/"
-        self.products = [coin]
-        self.message_list = []
-        
-        print("Lets count the messages!")
-    def on_message(self, msg):
-        print(json.dumps(msg, indent=4, sort_keys=True))
-        self.current_message = msg
-        if 'price' in msg and 'type' in msg:
-            print ("Message type:", msg["type"],
-                   "\t@ {:.3f}".format(float(msg["price"])))
-            self.message_list.append(msg)
-
-        print ("message list size: ", len(self.message_list))
-
-    def get_current_message(self):
-        message = ""
-        print ("message list size: ", len(self.message_list))
-        
-        try: 
-            message = self.message_list.pop()
-        except:
-            pass
-        return message
-             
-    def get_message_list(self):
-        return self.message_list
-    
-    def on_close(self):
-        print("-- Goodbye! --")
-        tm.sleep(5)
-        print ("Reconnecting ...")
-        self._connect()
-        tm.sleep(3)
-        self.start()
-    def _connect(self):
-        print ("calling connect")
-        if self.products is None:
-            self.products = [coin]
-        elif not isinstance(self.products, list):
-            self.products = [self.products]
-    
-        if self.url[-1] == "/":
-            self.url = self.url[:-1]
-    
-        if self.channels is None:
-            self.channels = [{"name": "ticker", "product_ids": [product_id for product_id in self.products]}]
-            sub_params = {'type': 'subscribe', 'product_ids': self.products, 'channels': self.channels}
-        else:
-            sub_params = {'type': 'subscribe', 'product_ids': self.products, 'channels': self.channels}
-    
-        if self.auth:
-            timestamp = str(tm.time())
-            message = timestamp + 'GET' + '/users/self/verify'
-            auth_headers = get_auth_headers(timestamp, message, self.api_key, self.api_secret, self.api_passphrase)
-            sub_params['signature'] = auth_headers['CB-ACCESS-SIGN']
-            sub_params['key'] = auth_headers['CB-ACCESS-KEY']
-            sub_params['passphrase'] = auth_headers['CB-ACCESS-PASSPHRASE']
-            sub_params['timestamp'] = auth_headers['CB-ACCESS-TIMESTAMP']
-    
-        self.ws = create_connection(self.url)   
-        self.ws.send(json.dumps(sub_params))
-
 
 class Lane:
     # horizontal lane, used by the corridor
@@ -689,13 +626,11 @@ class Portofolio:
         print ("issuing for buying: ", product_id, "size: ", size, "at price: ", price)
 #min hour day
         if test == False:
-            result = api.submit_order(
-                symbol=symbol,
-                qty=quantity,
-                side='buy',
-                type='limit',
-                limit_price=price,
-                time_in_force='gtc'
+            result = MarketOrderRequest(
+                      symbol=product_id,
+                      qty=size,
+                      side=OrderSide.BUY,
+                      time_in_force=TimeInForce.DAY
         )
             print("result of order: {0}".format(result))
 
@@ -712,13 +647,11 @@ class Portofolio:
             size = truncate(size,3)
             print ("maximum order size to be", size)
         if test == False:
-            result = api.submit_order(
-                symbol=symbol,
-                qty=quantity,
-                side='sell',
-                type='limit',
-                limit_price=price,
-                time_in_force='gtc'
+            result = MarketOrderRequest(
+                      symbol=product_id,
+                      qty=size,
+                      side=OrderSide.SELL,
+                      time_in_force=TimeInForce.DAY
         )
             print("result of order: {0}".format(result))
             
@@ -727,7 +660,12 @@ class Portofolio:
         pastTime = pastTime.isoformat()
         current_time =datetime.datetime.now().isoformat()
         print("past time is: ", pastTime)
-        rates = api.get_barset(symbol, timeframe, start=pasTime, end=current_time)
+        request_params = CryptoBarsRequest(
+                        symbol_or_symbols=[coin],
+                        timeframe=TimeFrame.Day,
+                        start=pastTime,
+                        end=current_time
+                 )
         self.rates = rates
         print("rates received")
         print("----------------")
@@ -754,11 +692,22 @@ class Portofolio:
         pastTime = datetime.datetime.now() - datetime.timedelta(hours=hoursBefore)
         self.pastTime = pastTime
         pastTime = pastTime.isoformat()
-        current_time =datetime.datetime.now().isoformat()
         print("past time is: ", pastTime)
-        self.rates[coin] = auth_client.get_product_historic_rates(product_id = coin, start = pastTime, end = current_time, granularity = 900)
+        # no keys required for crypto data
 
-        print ("Coin: {0} rates: {1}".format(coin, self.rates[coin]))
+        request_params = CryptoBarsRequest(
+                        symbol_or_symbols=[coin],
+                        timeframe=TimeFrame.Hour,
+                        start=pastTime
+                 )
+        
+        bars = history.get_crypto_bars(request_params)
+        
+        print ("Historic data received {0}", bars)
+        print( "turned to df {0}", bars.df)
+        # have to get the rates here
+        # self.rates = rates
+        # print ("Coin: {0} rates: {1}".format(coin, self.rates[coin]))
 
     def draw_historic_rates(self, coin):
         closing_prices = []
@@ -807,15 +756,26 @@ def stop_execution(*args, **kwargs):
     STOP_EXECUTION = True
     wsClient.close()
 
+def get_current_message(self):
+    message = ""
+    print ("message list size: ", len(self.message_list))
+    
+    try: 
+        message = self.message_list.pop()
+    except:
+        pass
+    return message
+
+
 def start(*args, **kwargs):
     global STOP_EXECUTION
     STOP_EXECUTION = False
-    wsClient.start()
+    # Start the WebSocket client
+    stream.run()
    # board.clear_board_values()
     
     penalty.initialize(corridor)
     
-    print(wsClient.url, wsClient.products)
     while (STOP_EXECUTION == False):
         
         current_message =  wsClient.get_current_message()
@@ -928,16 +888,24 @@ def get_rates(*args, **kwargs):
     portofolio.get_historic_last_days(coin,365)
     
 
-
 # Load credentials from a file
-with open('credentials.json') as f:
-    creds = json.load(f)
+with open('credentials_live.json') as f:
+    creds_live = json.load(f)
+with open('credentials_paper.json') as f:
+    creds_paper = json.load(f)    
 
-API_KEY = creds['API_KEY']
-API_SECRET = creds['API_SECRET']
+API_KEY_LIVE = creds_live['API_KEY']
+API_SECRET_LIVE = creds_live['API_SECRET']
+API_KEY_PAPER = creds_paper['API_KEY']
+API_SECRET_PAPER = creds_paper['API_SECRET']
 BASE_URL = 'https://paper-api.alpaca.markets'  # Use 'https://api.alpaca.markets' for live trading
 
-api = tradeapi.REST(API_KEY, API_SECRET, BASE_URL, api_version='v2')
+api = TradingClient(API_KEY_PAPER, API_SECRET_PAPER)
+
+# no keys required for crypto data
+history = CryptoHistoricalDataClient(API_KEY_LIVE, API_SECRET_LIVE)
+
+stream = CryptoDataStream(API_KEY_LIVE, API_SECRET_LIVE)
 
 # initiate database
 mongo_client = MongoClient('mongodb://localhost:27017/')
@@ -947,19 +915,26 @@ db = mongo_client.cryptocurrency_database
 db_orders = db["orders"]
 
 coin = ""
-while coin not in ["MIR-EUR","SHIB-EUR", "XTZ-EUR", "AVAX-EUR","1INCH-EUR","MATIC-EUR","CRV-EUR","ICP-EUR","FORTH-EUR","SKL-EUR","ANKR-EUR","LTC-EUR","BCH-EUR", "BNT-EUR", "UMA-EUR","NMR-EUR", "XLM-EUR", "OMG-EUR", "LINK-EUR", "BAND-EUR", "NU-EUR", "FIL-EUR", "ALGO-EUR", "GRT-EUR", "ETC-EUR", "BTC-EUR", "SNX-EUR"]:   
-    coin = input("Give input coin: ") or "MATIC-EUR"
+while coin not in ["MIR/USD","SHIB/USD", "XTZ/USD", "AVAX/USD","1INCH/USD","MATIC/USD","CRV/USD","ICP/USD","FORTH/USD","SKL/USD","ANKR/USD","LTC/USD","BCH/USD", "BNT/USD", "UMA/USD","NMR/USD", "XLM/USD", "OMG/USD", "LINK/USD", "BAND/USD", "NU/USD", "FIL/USD", "ALGO/USD", "GRT/USD", "ETC/USD", "BTC/USD", "SNX/USD"]:   
+    coin = input("Give input coin: ") or "BTC/USD"
 
+print("coin is: ", coin)
 db_ticks = db[coin]
 
 enable_movement = "n"
 enable_movement = input ("enable movement (use it at your own risk) (y/n) ?: ")
 
 
+async def on_bar(data):
+    print(f"Bar data: {data}")
 
-#wsClient = myWebsocketClient(api_key = key, api_secret = b64secret, api_passphrase= passphrase, auth=True, channels=None, mongo_collection = db_ticks, should_print = False)
+async def on_quote(data):
+    print(f"Quote: {data}")
 
-wsCliennt = AlpacaWebsocketClient([coin])
+
+# Subscribe to bar data for the specified cryptocurrency
+stream.subscribe_bars(on_bar, coin)
+stream.subscribe_quotes(on_quote, coin)
 
 # all the elements will need the figure
 figure = plt.figure(figsize=(8,6))
