@@ -6,6 +6,12 @@ from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.data.requests import CryptoLatestQuoteRequest
 from alpaca.data.live import CryptoDataStream
+from alpaca.broker.requests import ListAccountsRequest
+from alpaca.broker.enums import AccountEntities
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import GetAssetsRequest
+from alpaca.trading.enums import AssetClass
+
 
 import time as tm
 import matplotlib.pyplot as plt
@@ -15,15 +21,17 @@ from matplotlib.widgets import Button
 import matplotlib.dates as dates
 from pymongo import MongoClient
 import threading
-import ast
 import json
 
 # set them when the program starts, stream is used for the stream data
 # and history for the historic data
 stream = None
 history = None
+account = None
+broker = None
 api = None
-messageList = []
+message_list = []
+quote_list = []
 
 
 # TO DO
@@ -52,7 +60,7 @@ messageList = []
 
 # fees after every order completed  ~0.0035%
 
-TEST = False  # when false perform actual order with money
+TEST = True  # when false perform actual order with money
 # used to stop program execution
 STOP_EXECUTION = False
 
@@ -434,18 +442,15 @@ class Board:
     def add_to_closing_prices(self, closing_price, insertAtEnd = False):
         print("adding closing price {0}".format(closing_price))
         if insertAtEnd:
-            self.closing_prices.pop(0)
             self.closing_prices.append(closing_price)
         else:
             self.closing_prices.insert(0,closing_price)
-        #print("Closing price length: ", len(self.closing_prices))
+        print("Closing price length: ", len(self.closing_prices))
 
     def add_to_times(self,time, insertAtEnd = False):
-
   
         print("adding time {0}".format(time))
         if insertAtEnd:
-            self.times.pop(0)
             self.times.append(time)             
         else:
             self.times.insert(0, time)  
@@ -542,7 +547,12 @@ class Portofolio:
     
     def fetch_orders(self):
         self.delete_all_orders()
-        orders = list(auth_client.get_orders())  
+        orders= MarketOrderRequest(
+                    symbol=coin,
+                    qty=0.023,
+                    side=OrderSide.BUY,
+                    time_in_force=TimeInForce.DAY
+                    )  
         for order in orders:
             print ("order is: ", order)
             self.insert_or_update_order(order)
@@ -706,19 +716,14 @@ class Portofolio:
         print ("Historic data received {0}", bars)
         print( "turned to df {0}", bars.df)
         # have to get the rates here
-        # self.rates = rates
-        # print ("Coin: {0} rates: {1}".format(coin, self.rates[coin]))
+        self.rates[coin] = bars[coin]
+        print ("Coin: {0} rates: {1}".format(coin, self.rates[coin]))
 
     def draw_historic_rates(self, coin):
         closing_prices = []
         times = []
         for line in self.rates[coin]:
-            epoc_time, low, high, open, close, volume = line            
-            midnight = datetime.datetime.combine(datetime.datetime.today(), datetime.time.min) 
-            yesterday_midnight = midnight - datetime.timedelta(days=3)
-            if  datetime.datetime.fromtimestamp(epoc_time) > yesterday_midnight :
-                dt =  datetime.datetime.fromtimestamp(epoc_time)
-                board.add_entry_in_board(close, dt, is_historic_entry = True)
+            board.add_entry_in_board(line.close, line.timestamp, is_historic_entry = True)
                 
         print("closing prices size: ", len(closing_prices), "times size: ", len(times))
         self.axes.xaxis.set_major_formatter(dates.DateFormatter("%d-%m %H:%M"))
@@ -726,22 +731,21 @@ class Portofolio:
 
     def get_balances(self):
         # assuming that we trade only currencies with euro
-        accounts = auth_client.get_accounts()
-        postfix = "-EUR"
-
-        for account in accounts:
-            if "EUR" in account['currency']:
-                postfix = ""
-            else:
-                postfix = "-EUR"
-            balance = 0.0
-            if float(account['balance']) > 0:
-                balance = float(account['balance'])
-                
-            self.balance[account['currency']+postfix] = balance
+        account = api.get_account()
+        balance = 0.0
+        if float(account.cash) > 0:
+            balance = float(account.cash)               
             if balance > 0.0:
-                print("account: ", account["currency"], "balance: ", balance)
-        print("cash balance is: ", self.balance['EUR'])
+                print("account: ", balance , "currency:", account.currency)
+            self.balance[account.currency] = balance
+        print("cash balance is: ", self.balance)
+
+    def get_assets(self):
+        search_params = GetAssetsRequest(asset_class=AssetClass.CRYPTO)
+        assets = api.get_all_assets(search_params)
+        for asset in assets:
+            self.balance[asset.symbol] = asset.tradable_balance
+            print("asset: ", asset.symbol, "balance: ", asset.tradable_balance)
 
     def refresh_portofolio_and_orders(self):
         self.get_balances()
@@ -754,7 +758,7 @@ def handler(*args, **kwargs):
 def stop_execution(*args, **kwargs):
     global STOP_EXECUTION
     STOP_EXECUTION = True
-    wsClient.close()
+    stream.close()
 
 def get_current_message(self):
     message = ""
@@ -778,7 +782,7 @@ def start(*args, **kwargs):
     
     while (STOP_EXECUTION == False):
         
-        current_message =  wsClient.get_current_message()
+        current_message =  stream.get_current_message()
         #print ("\ncurrent message ",current_message)
 
         
@@ -881,31 +885,47 @@ def start(*args, **kwargs):
         
 def start_thread(*args, **kwargs):
     threading.Thread(target = start).start()
-    #start()
-
 
 def get_rates(*args, **kwargs):
     portofolio.get_historic_last_days(coin,365)
     
-
 # Load credentials from a file
 with open('credentials_live.json') as f:
     creds_live = json.load(f)
 with open('credentials_paper.json') as f:
-    creds_paper = json.load(f)    
+    creds_paper = json.load(f)
+with open('credentials_broker_paper.json') as f:
+    creds_broker_paper = json.load(f)            
 
 API_KEY_LIVE = creds_live['API_KEY']
 API_SECRET_LIVE = creds_live['API_SECRET']
+
 API_KEY_PAPER = creds_paper['API_KEY']
 API_SECRET_PAPER = creds_paper['API_SECRET']
+
+API_BROKER_KEY_PAPER = creds_broker_paper['API_KEY']
+API_BROKER_SECRET_PAPER = creds_broker_paper['API_SECRET']
+
 BASE_URL = 'https://paper-api.alpaca.markets'  # Use 'https://api.alpaca.markets' for live trading
 
-api = TradingClient(API_KEY_PAPER, API_SECRET_PAPER)
 
-# no keys required for crypto data
 history = CryptoHistoricalDataClient(API_KEY_LIVE, API_SECRET_LIVE)
 
 stream = CryptoDataStream(API_KEY_LIVE, API_SECRET_LIVE)
+
+#broker= BrokerClient(API_BROKER_KEY_PAPER, API_BROKER_SECRET_PAPER)
+
+# set this via global variable on top
+if TEST:
+    api = TradingClient(API_KEY_PAPER, API_SECRET_PAPER)
+else:
+    api = TradingClient(API_KEY_LIVE, API_SECRET_LIVE)
+filter = ListAccountsRequest(
+                    created_after=datetime.datetime.strptime("2024-01-30", "%Y-%m-%d"),
+                    entities=[AccountEntities.CONTACT, AccountEntities.IDENTITY]
+                    )
+# accounts = broker.list_accounts(search_parameters=filter)
+# print(accounts)
 
 # initiate database
 mongo_client = MongoClient('mongodb://localhost:27017/')
@@ -926,9 +946,11 @@ enable_movement = input ("enable movement (use it at your own risk) (y/n) ?: ")
 
 
 async def on_bar(data):
+    message_list.append(data)
     print(f"Bar data: {data}")
 
 async def on_quote(data):
+    quote_list.append(data)
     print(f"Quote: {data}")
 
 
@@ -944,22 +966,12 @@ corridor  = Corridor(figure)
 penalty = Penalty()
 board = Board(figure)
 
-
-
-
-#products = auth_client.get_products()
-
-#print(products)
-#print(auth_client.get_product_order_book(product_id="NMR-EUR", level=3))
-
-
-#auth_client.get_product_24hr_stats("UMA-EUR")
-
-
-
 portofolio.get_historic_rates(coin)
 portofolio.draw_historic_rates(coin)
 portofolio.get_balances()
+
+# store minimum order size etc
+portofolio.get_assets()
 
 print ("balance on this coin is: ", portofolio.get_coin_balance(coin))
 portofolio.fetch_orders()
