@@ -1,17 +1,25 @@
 from alpaca.data.historical import CryptoHistoricalDataClient
-from alpaca.data.requests import CryptoBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.data.requests import CryptoLatestQuoteRequest
 from alpaca.data.live import CryptoDataStream
-from alpaca.broker.requests import ListAccountsRequest
-from alpaca.broker.enums import AccountEntities
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import GetAssetsRequest
-from alpaca.trading.enums import AssetClass
 
+from alpaca.trading.requests import (
+    MarketOrderRequest,
+    GetOrdersRequest,
+    GetAssetsRequest
+)
+from alpaca.data.requests import (
+    CryptoBarsRequest
+)
+
+from alpaca.trading.enums import (
+    AssetClass,
+    OrderSide,
+    TimeInForce,
+    QueryOrderStatus,
+    OrderStatus
+)
 
 import time as tm
 import matplotlib.pyplot as plt
@@ -32,7 +40,6 @@ broker = None
 api = None
 message_list = []
 quote_list = []
-
 
 # TO DO
 # 0) prepei na vrw tropo na afairw ta points needed for a move apo to penalties twn lanes
@@ -64,11 +71,9 @@ TEST = True  # when false perform actual order with money
 # used to stop program execution
 STOP_EXECUTION = False
 
-
 # todo 
 #create a watchlist, alarms etc
 # get all historic rates and put them in a db
-
 
 class Penalty:
     def initialize(self, corridor):
@@ -104,8 +109,7 @@ class Penalty:
         print("current median:", self.current_median)
         print("grace points:", self.grace_points)
         print("---------------\n\n\n")
-       
-        
+           
     def increase_grace_points(self):
         self.grace_points = self.grace_points + self.grace_step
         
@@ -120,7 +124,6 @@ class Penalty:
 
     def increase_penalty_upper_lane(self):
         self.upper_lane_penalty_points = self.upper_lane_penalty_points + self.upper_lane_penalty_step
-
 
     def refresh_penalty_values(self, current_price):
         self.upper_lane_y = self.corridor.get_high_y()
@@ -203,10 +206,6 @@ class Penalty:
               
         print ("#####################################################################")
         
-         
-#class Move:
-#    def move_upper_
-
 def truncate(f, n):
     '''Truncates/pads a float f to n decimal places without rounding'''
     s = '{}'.format(f)
@@ -214,24 +213,6 @@ def truncate(f, n):
         return '{0:.{1}f}'.format(f, n)
     i, p, d = s.partition('.')
     return '.'.join([i, (d+'0'*n)[:n]])
-
-
-class AlpacaWebsocketClient():
-    def __init__(self, symbols):
-        self.conn = tradeapi.stream2.StreamConn(API_KEY, API_SECRET, BASE_URL)
-        self.symbols = symbols
-
-    async def on_quote(self, conn, channel, data):
-        print(f"Quote: {data}")
-
-    async def on_trade(self, conn, channel, data):
-        print(f"Trade: {data}")
-
-    def run(self):
-        for symbol in self.symbols:
-            self.conn.subscribe_quotes(self.on_quote, symbol)
-            self.conn.subscribe_trades(self.on_trade, symbol)
-        self.conn.run()
 
 class Lane:
     # horizontal lane, used by the corridor
@@ -252,12 +233,10 @@ class Lane:
         self.ydata = y
 
     def remove(self):
-        self.axes.lines.remove(self.reference)
+        self.reference.remove()
         self.reference = None
-        plt.draw()
-        
+        plt.draw()      
     
-
 class Corridor:
     def __init__(self, figure):
         self.upperLane = Lane(figure)
@@ -342,7 +321,6 @@ class Corridor:
             self.cid = self.figure.canvas.mpl_connect('button_press_event', self)
             print ("click to set up the lanes and press right click when done")
 
-
 # cancel a active sell order ---> lose x points
 # cancel an active buy order ---> 
             
@@ -395,7 +373,6 @@ class Corridor:
                     self.upperLane.draw()
                 self.lowerLane.draw()
           
-
 class Point:
     def __init__(self,x=0,y=0, figure= None):
         self.x = x
@@ -411,9 +388,7 @@ class Point:
             
     def draw(self):
        self.axes.plot([self.x], [self.y] , marker='o', markersize=3, color="red")
-       plt.draw()
-
-        
+       plt.draw()       
         
 class Board:
     def __init__(self, figure):
@@ -468,7 +443,6 @@ class Board:
                 return self.times[0]
         else:
             return None
-
         
     def onclick(self, event):
         print("clicked")
@@ -481,11 +455,9 @@ class Board:
     def draw(self):
         self.plotLines(self.times, self.closing_prices)
         plt.draw()
-          
-        
+                
     def plotLines(self, x,y):
-        self.axes.plot(x, y)
-        
+        self.axes.plot(x, y)     
 
 class Portofolio:
     
@@ -493,6 +465,7 @@ class Portofolio:
         self.api = api
         self.figure = figure
         self.rates = {}
+        self.assets = {}
         self.axes = self.figure.add_subplot(111, picker = 5)
         self.balance = {}
         
@@ -517,46 +490,53 @@ class Portofolio:
     def delete_all_orders(self):
         db_orders.delete_many({})
     
-    def delete_order_from_db(self,order):
+    def delete_order_from_db(self, order):
         query = {'_id':order["id"]}
         db_orders.delete_one(query)
        
-    
     def insert_or_update_order(self, order):
-        query = {'_id':order["id"]}
+        query = {'_id':order.id}
         old_order = db_orders.find_one(query)
         if old_order != None:
             print ("order exists in database {0}".format(old_order))
-            if(old_order["status"] != order["status"]):
-                print ("order {0} has changed status from {1} to {2}".format(order["_id"], old_order["status"], order["status"]))
+            if(old_order["status"] != order.status):
+                print ("order {0} has changed status from {1} to {2}".format(order.id, old_order["status"], order.status))
                 self.delete_order_from_db(old_order)
                 self.handle_order_change(old_order, order)
+            # probably the order has been completed (bought)    
             if old_order["side"] == "buy":
                 penalty.decrease_penalty_lower_lane()
             else:
                 penalty.decrease_penalty_upper_lane()
-
                 
         else:
             # change key name to make use of it in db
             order["_id"] = order.pop("id")
             result = db_orders.insert_one(order)
-            print("inserted order: {0}".format(result.inserted_id))
+            print("inserted order: {0}".format(result.inserted_id))       
         
-        
-    
+    def get_position(self, coin):
+        # '/' not being supported for position calls
+        symbol = coin.replace('/', '')
+        position = api.get_open_position(symbol_or_asset_id=symbol)
+        print("position: ", position)
+        print("coin: ", position.symbol, "balance:", position.qty)
+        self.balance[coin] = position.qty
+   
     def fetch_orders(self):
         self.delete_all_orders()
-        orders= MarketOrderRequest(
-                    symbol=coin,
-                    qty=0.023,
-                    side=OrderSide.BUY,
-                    time_in_force=TimeInForce.DAY
-                    )  
+        req = GetOrdersRequest(
+            status = QueryOrderStatus.ALL,
+            symbols = [coin]
+        )
+        orders = api.get_orders(req)
         for order in orders:
             print ("order is: ", order)
-            self.insert_or_update_order(order)
-
+            if order.status == OrderStatus.FILLED:
+                pass
+            # track open orders in the db
+            elif order.status == OrderStatus.OPEN:
+                self.insert_or_update_order(order)
             
     def handle_order_change(self,  old_order, new_order):
        # balance has changed, refresh
@@ -608,7 +588,7 @@ class Portofolio:
                            
                            
     def get_cash_balance(self):
-        return self.balance["EUR"]
+        return self.balance["USD"]
 
         
     def get_coin_balance(self, coin):
@@ -618,7 +598,7 @@ class Portofolio:
     def issue_buy_order(self, product_id,  price, size = "", test = TEST):
         
         cash_balance = self.get_cash_balance()
-        print("cash balance:", )
+        print("cash balance:", cash_balance )
         
         if size=="":
             size = (cash_balance * 0.995) / price
@@ -676,11 +656,6 @@ class Portofolio:
                         start=pastTime,
                         end=current_time
                  )
-        self.rates = rates
-        print("rates received")
-        print("----------------")
-        print(rates)
-        return rates
 
     def get_historic_last_days(self, coin , n):
         for i in range (1, n):
@@ -729,8 +704,9 @@ class Portofolio:
         self.axes.xaxis.set_major_formatter(dates.DateFormatter("%d-%m %H:%M"))
         board.draw()
 
-    def get_balances(self):
+    def get_balance(self):
         # assuming that we trade only currencies with euro
+        print("getting balances")
         account = api.get_account()
         balance = 0.0
         if float(account.cash) > 0:
@@ -741,14 +717,15 @@ class Portofolio:
         print("cash balance is: ", self.balance)
 
     def get_assets(self):
+        # not sure what this does
         search_params = GetAssetsRequest(asset_class=AssetClass.CRYPTO)
         assets = api.get_all_assets(search_params)
         for asset in assets:
-            self.balance[asset.symbol] = asset.tradable_balance
-            print("asset: ", asset.symbol, "balance: ", asset.tradable_balance)
+            self.assets[asset.symbol] = asset
+            print("asset: ", asset)
 
     def refresh_portofolio_and_orders(self):
-        self.get_balances()
+        self.get_balance()
         self.fetch_orders()
 
 def handler(*args, **kwargs):
@@ -771,20 +748,19 @@ def get_current_message(self):
     return message
 
 
-def start(*args, **kwargs):
+async def start(*args, **kwargs):
     global STOP_EXECUTION
     STOP_EXECUTION = False
     # Start the WebSocket client
-    stream.run()
    # board.clear_board_values()
-    
+    print("starting the websocket, good luck!!")
+    start_thread_bars()
     penalty.initialize(corridor)
     
     while (STOP_EXECUTION == False):
         
-        current_message =  stream.get_current_message()
-        #print ("\ncurrent message ",current_message)
-
+        current_message =  portofolio.get_current_message()
+        print ("\ncurrent message ",current_message)
         
         if current_message == "":
              print(".... no new messages ....")
@@ -795,11 +771,10 @@ def start(*args, **kwargs):
         portofolio.refresh_portofolio_and_orders()
         
         print("type: ", type(current_message))
-        #print ("current message: ", current_message)
+        print ("current message: ", current_message)
         coin = current_message["product_id"]
         price = float(current_message["price"])
         print("current price: ", price)
-
 
         # lets hope this works
         timestamp = datetime.datetime.strptime(current_message["time"], '%Y-%m-%dT%H:%M:%S.%fZ').timestamp()
@@ -821,7 +796,6 @@ def start(*args, **kwargs):
         
         sell_orders = portofolio.get_sell_orders_for_coin_from_db(coin)
         buy_orders = portofolio.get_buy_orders_for_coin_from_db(coin)
-
         
         if len(sell_orders):
             for order in sell_orders:
@@ -842,7 +816,6 @@ def start(*args, **kwargs):
         if cash_balance > 1.0:
             portofolio.issue_buy_order(current_message["product_id"], corridor.get_low_y())
 
-         
         print("estimated sell order worth {0} current order worth {1}".format(estimated_order_worth, current_worth))
         
         current_portofolio_worth = current_worth + cash_balance
@@ -884,7 +857,15 @@ def start(*args, **kwargs):
             
         
 def start_thread(*args, **kwargs):
+    print("starting thread")
     threading.Thread(target = start).start()
+
+async def start_bars():
+     stream.run()
+
+async def start_thread_bars(*args, **kwargs):
+    print("starting thread")
+    threading.Thread(target = start_bars).start()
 
 def get_rates(*args, **kwargs):
     portofolio.get_historic_last_days(coin,365)
@@ -911,21 +892,15 @@ BASE_URL = 'https://paper-api.alpaca.markets'  # Use 'https://api.alpaca.markets
 
 history = CryptoHistoricalDataClient(API_KEY_LIVE, API_SECRET_LIVE)
 
-stream = CryptoDataStream(API_KEY_LIVE, API_SECRET_LIVE)
-
-#broker= BrokerClient(API_BROKER_KEY_PAPER, API_BROKER_SECRET_PAPER)
-
 # set this via global variable on top
 if TEST:
     api = TradingClient(API_KEY_PAPER, API_SECRET_PAPER)
+    stream = CryptoDataStream(API_KEY_PAPER, API_SECRET_PAPER)
+
 else:
     api = TradingClient(API_KEY_LIVE, API_SECRET_LIVE)
-filter = ListAccountsRequest(
-                    created_after=datetime.datetime.strptime("2024-01-30", "%Y-%m-%d"),
-                    entities=[AccountEntities.CONTACT, AccountEntities.IDENTITY]
-                    )
-# accounts = broker.list_accounts(search_parameters=filter)
-# print(accounts)
+    stream = CryptoDataStream(API_KEY_LIVE, API_SECRET_LIVE)
+
 
 # initiate database
 mongo_client = MongoClient('mongodb://localhost:27017/')
@@ -944,7 +919,6 @@ db_ticks = db[coin]
 enable_movement = "n"
 enable_movement = input ("enable movement (use it at your own risk) (y/n) ?: ")
 
-
 async def on_bar(data):
     message_list.append(data)
     print(f"Bar data: {data}")
@@ -953,10 +927,10 @@ async def on_quote(data):
     quote_list.append(data)
     print(f"Quote: {data}")
 
-
 # Subscribe to bar data for the specified cryptocurrency
 stream.subscribe_bars(on_bar, coin)
-stream.subscribe_quotes(on_quote, coin)
+# leave this for now until we can use it
+#stream.subscribe_quotes(on_quote, coin)
 
 # all the elements will need the figure
 figure = plt.figure(figsize=(8,6))
@@ -968,7 +942,9 @@ board = Board(figure)
 
 portofolio.get_historic_rates(coin)
 portofolio.draw_historic_rates(coin)
-portofolio.get_balances()
+# get the current balance in USD
+portofolio.get_balance()
+portofolio.get_position(coin)
 
 # store minimum order size etc
 portofolio.get_assets()
@@ -980,7 +956,6 @@ axstart = plt.axes([0, 0, 0.1, 0.075])
 axhello = plt.axes([0.1, 0, 0.1, 0.075])
 axstop = plt.axes([0.2, 0, 0.1, 0.075])
 axhistoric_rates = plt.axes([0.5, 0, 0.1, 0.075])
-
 
 bstart = Button(axstart, 'Start')
 bhello = Button(axhello, 'Lanes')
@@ -998,6 +973,5 @@ bhello.on_clicked(handler)
 bstart.on_clicked(start_thread)
 bstop.on_clicked(stop_execution)
 bhistoric.on_clicked(get_rates)
-
 
 plt.show()
