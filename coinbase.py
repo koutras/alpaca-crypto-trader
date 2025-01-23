@@ -785,10 +785,9 @@ def start(*args, **kwargs):
 
         # lets hope this works
         current_timestamp = current_message.timestamp
-        fmt_time =  current_timestamp.time().strftime("%H:%M")
 
-        print("try adding ({0}, {1})".format(fmt_time,price))
-        board.add_entry_in_board(price, fmt_time,  insertAtEnd = True)
+        print("try adding ({0}, {1})".format(current_timestamp,price))
+        board.add_entry_in_board(price, current_timestamp,  insertAtEnd = True)
         
         cash_balance = portofolio.get_cash_balance()
         print("current cash balance: ", cash_balance)
