@@ -3,6 +3,8 @@ from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.client import TradingClient
 from alpaca.data.live import CryptoDataStream
 from alpaca.trading.client import TradingClient
+import asyncio
+
 
 from alpaca.trading.requests import (
     MarketOrderRequest,
@@ -748,13 +750,12 @@ def get_current_message(self):
     return message
 
 
-async def start(*args, **kwargs):
+def start(*args, **kwargs):
     global STOP_EXECUTION
     STOP_EXECUTION = False
     # Start the WebSocket client
    # board.clear_board_values()
     print("starting the websocket, good luck!!")
-    start_thread_bars()
     penalty.initialize(corridor)
     
     while (STOP_EXECUTION == False):
@@ -855,19 +856,9 @@ async def start(*args, **kwargs):
             for order in buy_orders:
                 print(order)
             
-        
-def start_thread(*args, **kwargs):
-    print("starting thread")
-    threading.Thread(target = start).start()
-
-async def start_bars():
-     stream.run()
-
 async def start_thread_bars(*args, **kwargs):
     print("starting thread")
-    threading.Thread(target = start_bars).start()
-
-def get_rates(*args, **kwargs):
+async def get_rates(*args, **kwargs):
     portofolio.get_historic_last_days(coin,365)
     
 # Load credentials from a file
@@ -952,6 +943,9 @@ portofolio.get_assets()
 print ("balance on this coin is: ", portofolio.get_coin_balance(coin))
 portofolio.fetch_orders()
 
+thread = threading.Thread(target=stream.run)
+thread.start()
+
 axstart = plt.axes([0, 0, 0.1, 0.075])
 axhello = plt.axes([0.1, 0, 0.1, 0.075])
 axstop = plt.axes([0.2, 0, 0.1, 0.075])
@@ -970,7 +964,7 @@ bhistoric = Button(axhistoric_rates, 'Historic')
 # )
 
 bhello.on_clicked(handler)
-bstart.on_clicked(start_thread)
+bstart.on_clicked(start)
 bstop.on_clicked(stop_execution)
 bhistoric.on_clicked(get_rates)
 
