@@ -5,7 +5,6 @@ from alpaca.data.live import CryptoDataStream
 from alpaca.trading.client import TradingClient
 import asyncio
 
-
 from alpaca.trading.requests import (
     MarketOrderRequest,
     GetOrdersRequest,
@@ -40,7 +39,6 @@ history = None
 account = None
 broker = None
 api = None
-message_list = []
 quote_list = []
 
 # TO DO
@@ -470,6 +468,30 @@ class Portofolio:
         self.assets = {}
         self.axes = self.figure.add_subplot(111, picker = 5)
         self.balance = {}
+        self.message_list = []
+        self.quote_list = []
+
+    def get_message_list(self):
+        return self.message_list   
+
+    def add_message(self, message):
+        self.message_list.append(message)
+
+    def get_quote_list(self):
+        return self.quote_list
+    
+    def add_quote(self, quote):
+        self.quote_list.append(quote)
+
+    def get_current_message(self):
+        message = ""
+        print ("message list size: ", len(self.message_list))
+        
+        try: 
+            message = self.message_list.pop()
+        except:
+            pass
+        return message
         
     def get_order_winnings(self, order):
         ''' Get Potential Winnings of order'''
@@ -510,7 +532,6 @@ class Portofolio:
                 penalty.decrease_penalty_lower_lane()
             else:
                 penalty.decrease_penalty_upper_lane()
-                
         else:
             # change key name to make use of it in db
             order["_id"] = order.pop("id")
@@ -582,21 +603,17 @@ class Portofolio:
         return list(orders)
     
     def get_buy_orders_for_coin_from_db(self, coin):
-        return self.get_side_orders_for_coin_from_db(coin,"buy")
-    
+        return self.get_side_orders_for_coin_from_db(coin,"buy")  
     
     def get_sell_orders_for_coin_from_db(self, coin):
         return self.get_side_orders_for_coin_from_db(coin,"sell")
-                           
-                           
+                                                      
     def get_cash_balance(self):
         return self.balance["USD"]
 
-        
     def get_coin_balance(self, coin):
             return float(self.balance[coin])
-             
-             
+                       
     def issue_buy_order(self, product_id,  price, size = "", test = TEST):
         
         cash_balance = self.get_cash_balance()
@@ -739,17 +756,6 @@ def stop_execution(*args, **kwargs):
     STOP_EXECUTION = True
     stream.close()
 
-def get_current_message(self):
-    message = ""
-    print ("message list size: ", len(self.message_list))
-    
-    try: 
-        message = self.message_list.pop()
-    except:
-        pass
-    return message
-
-
 def start(*args, **kwargs):
     global STOP_EXECUTION
     STOP_EXECUTION = False
@@ -773,13 +779,13 @@ def start(*args, **kwargs):
         
         print("type: ", type(current_message))
         print ("current message: ", current_message)
-        coin = current_message["product_id"]
-        price = float(current_message["price"])
+        coin = current_message.symbol
+        price = float(current_message.close)
         print("current price: ", price)
 
         # lets hope this works
-        timestamp = datetime.datetime.strptime(current_message["time"], '%Y-%m-%dT%H:%M:%S.%fZ').timestamp()
-        fmt_time =  datetime.datetime.fromtimestamp(timestamp)
+        current_timestamp = current_message.timestamp
+        fmt_time =  current_timestamp.time().strftime("%H:%M")
 
         print("try adding ({0}, {1})".format(fmt_time,price))
         board.add_entry_in_board(price, fmt_time,  insertAtEnd = True)
@@ -787,10 +793,10 @@ def start(*args, **kwargs):
         cash_balance = portofolio.get_cash_balance()
         print("current cash balance: ", cash_balance)
         
-        current_price = float(current_message["price"])
+        current_price = float(current_message.close)
         penalty.calculate_penalty(current_price)
         penalty.print()
-        print( current_message["product_id"], " is now: ", current_price  )
+        print( current_message.symbol, " is now: ", current_price  )
         current_worth = 0.0
         estimated_order_worth = 0.0
         current_worth = current_worth + portofolio.get_coin_balance(coin) * current_price
@@ -804,10 +810,9 @@ def start(*args, **kwargs):
                 estimated_order_worth = estimated_order_worth + portofolio.get_order_winnings(order)     
                 print("order with status: ", order["status"], "actual worth: ", current_worth, " estimated_worth ", estimated_order_worth )
         else:
-            if portofolio.get_coin_balance(current_message["product_id"]) > 0.0:
-                portofolio.issue_sell_order(current_message["product_id"], corridor.get_high_y())
+            if portofolio.get_coin_balance(current_message.symbol) > 0.0:
+                portofolio.issue_sell_order(current_message.symbol, corridor.get_high_y())
                 
-    
         if len(buy_orders):
             for order in buy_orders:
                 cash_balance = cash_balance - float(order["price"]) * float(order["size"])
@@ -815,22 +820,21 @@ def start(*args, **kwargs):
         print("available cash balance after substructing balance reserved for buy orders: ", cash_balance)
         # dont let cash balance inactive, will have to find a more clever way eventually
         if cash_balance > 1.0:
-            portofolio.issue_buy_order(current_message["product_id"], corridor.get_low_y())
+            portofolio.issue_buy_order(current_message.symbol, corridor.get_low_y())
 
         print("estimated sell order worth {0} current order worth {1}".format(estimated_order_worth, current_worth))
         
         current_portofolio_worth = current_worth + cash_balance
         print ("actual portofolio worth {0}".format(current_portofolio_worth))        
-        
-        
+                
         if current_price > (corridor.get_high_y() + corridor.get_low_y())/2 :
             print("price is above the middle")
             sell_orders = portofolio.get_sell_orders_for_coin_from_db(coin)
             if len(sell_orders) == 0:
                 print("Price above median lane but no active sell orders; issuing sell order and passing")
                 # there is balance in that coin
-                if portofolio.get_coin_balance(current_message["product_id"]) > 0.0: 
-                    portofolio.issue_sell_order(current_message["product_id"], corridor.get_high_y())
+                if portofolio.get_coin_balance(current_message.symbol) > 0.0: 
+                    portofolio.issue_sell_order(current_message.symbol, corridor.get_high_y())
                 else:
                     print("cannot issue a sell order since there isn't any balance for this coin")
                     
@@ -847,7 +851,7 @@ def start(*args, **kwargs):
             buy_orders = portofolio.get_buy_orders_for_coin_from_db(coin)
             if len(buy_orders) == 0:
                 print("Price below median lane but no active buy orders; buying and passing")
-                portofolio.issue_buy_order(current_message["product_id"], corridor.get_low_y())
+                portofolio.issue_buy_order(current_message.symbol, corridor.get_low_y())
 
                 continue
             print("effective buy orders: ")
@@ -855,9 +859,11 @@ def start(*args, **kwargs):
                 portofolio.refresh_portofolio_and_orders()
             for order in buy_orders:
                 print(order)
-            
-async def start_thread_bars(*args, **kwargs):
-    print("starting thread")
+
+def start_main_loop(*args, **kwargs):
+    thread = threading.Thread(target=start)
+    thread.start()   
+
 async def get_rates(*args, **kwargs):
     portofolio.get_historic_last_days(coin,365)
     
@@ -911,12 +917,14 @@ enable_movement = "n"
 enable_movement = input ("enable movement (use it at your own risk) (y/n) ?: ")
 
 async def on_bar(data):
-    message_list.append(data)
+    portofolio.add_message(data)
     print(f"Bar data: {data}")
 
 async def on_quote(data):
-    quote_list.append(data)
+    portofolio.add_quote(data)
     print(f"Quote: {data}")
+
+
 
 # Subscribe to bar data for the specified cryptocurrency
 stream.subscribe_bars(on_bar, coin)
@@ -963,8 +971,10 @@ bhistoric = Button(axhistoric_rates, 'Historic')
 #     disabled=False,
 # )
 
+
+
 bhello.on_clicked(handler)
-bstart.on_clicked(start)
+bstart.on_clicked(start_main_loop)
 bstop.on_clicked(stop_execution)
 bhistoric.on_clicked(get_rates)
 
