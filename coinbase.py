@@ -401,10 +401,10 @@ class Board:
     # for a non historic entry the value is only added if the time is greater that the last added time
     
     def add_entry_in_board(self, closing_price, time, insertAtEnd = False, is_historic_entry = False):
-        if (is_historic_entry):
-            pass
-        else:
-            time = time + datetime.timedelta(hours=3)
+        # if (is_historic_entry):
+        #     pass
+        # else:
+        #     time = time + datetime.timedelta(hours=3)
         latest_added_time  = self.get_latest_time(insertAtEnd)
         print ("latest added time: ", latest_added_time, "about to add time: ", time)
         if(is_historic_entry):
@@ -692,7 +692,7 @@ class Portofolio:
 
         print ("Coin: {0} rates: {1}".format(coin, self.rates[coin]))
 # takes insufficient funds
-    def get_historic_rates(self, coin, hoursBefore = 40):
+    def get_historic_rates(self, coin, hoursBefore = 220):
         pastTime = datetime.datetime.now() - datetime.timedelta(hours=hoursBefore)
         self.pastTime = pastTime
         pastTime = pastTime.isoformat()
@@ -783,11 +783,9 @@ def start(*args, **kwargs):
         price = float(current_message.close)
         print("current price: ", price)
 
-        # lets hope this works
         current_timestamp = current_message.timestamp
-
         print("try adding ({0}, {1})".format(current_timestamp,price))
-        board.add_entry_in_board(price, current_timestamp,  insertAtEnd = True)
+        board.add_entry_in_board(price, current_timestamp,  insertAtEnd = False)
         
         cash_balance = portofolio.get_cash_balance()
         print("current cash balance: ", cash_balance)
