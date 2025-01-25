@@ -3,7 +3,6 @@ from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.client import TradingClient
 from alpaca.data.live import CryptoDataStream
 from alpaca.trading.client import TradingClient
-import asyncio
 
 from alpaca.trading.requests import (
     MarketOrderRequest,
@@ -92,7 +91,7 @@ class Penalty:
         self.current_changes= 1
         self.lowest_highest_price_without_loss = (self.lower_lane_y / 0.995) # have to check this
         # values that can be altered
-        self.points_needed_for_a_move= 25
+        self.points_needed_for_a_move= 800
         self.upper_lane_penalty_step = 1
         self.lower_lane_penalty_step = 1
         self.grace_step = 100
@@ -148,25 +147,15 @@ class Penalty:
         if self.current_price < self.lowest_price:
             self.lowest_price = self.current_price
             
-        if self.current_price > self.upper_lane_y and order!=None and order["side"] == "buy":
-            print("current price over selling price and active buy order")
-            self.upper_lane_penalty_points = self.upper_lane_penalty_points + self.upper_lane_penalty_step
+        # if current price is consistently above upper lane and about to sell, consider increasing lower lane    
+        if self.current_price > self.upper_lane_y:
+            print("current price over selling price")
+            self.increase_penalty_lower_lane()
 
-        if self.current_price > self.lower_lane_y and order!=None and order["side"] == "buy":
-            print("current price over buying price")
-            self.increase_penalty_lower_lane()
-            
-        if self.current_price < self.lower_lane_y and order!=None and order["side"] == "sell":
+        # if current price is consistently above upper lane and about to buy, consider decreasing upper lane     
+        if self.current_price < self.lower_lane_y:
             print("current price lower that buying price")
-            self.increase_penalty_lower_lane()
-            
-        if self.current_price > self.lanes_median and order!=None and order["side"] == "buy":
-            print("current price very high for a buy order")
-            self.increase_penalty_lower_lane()
-            
-        if self.current_price < self.lanes_median and order!=None and order["side"] == "sell":
-            print("current price very low for a sell order")
-            self.increase_penalty_upper_lane()          
+            self.increase_penalty_upper_lane()
             
         self.total_penalty_points = self.upper_lane_penalty_points + self.lower_lane_penalty_points - self.grace_points
 
@@ -497,10 +486,6 @@ class Portofolio:
         ''' Get Potential Winnings of order'''
         return float(order["size"]) * float(order["price"])
     
-    def fetch_order(self, id):
-        order = auth_client.get_order(id)
-        return order
-    
     def fetch_active_order(self, product_id):
         db_order = None
         try:
@@ -508,7 +493,6 @@ class Portofolio:
             db_order = db_orders.find(query)[0]   
         except:
             pass
-        #order = self.fetch_order(db_order.id)
         return db_order
     
     def delete_all_orders(self):
@@ -613,6 +597,21 @@ class Portofolio:
 
     def get_coin_balance(self, coin):
             return float(self.balance[coin])
+    
+    def save_order_to_db(order):
+        order_data = {
+            'id': order.id,
+            'symbol': order.symbol,
+            'qty': order.qty,
+            'side': order.side,
+            'type': order.type,
+            'time_in_force': order.time_in_force,
+            'status': order.status,
+            'filled_qty': order.filled_qty,
+            'created_at': order.created_at,
+            'updated_at': order.updated_at
+        }
+        db_orders.insert_one(order_data)    
                        
     def issue_buy_order(self, product_id,  price, size = "", test = TEST):
         
@@ -634,14 +633,19 @@ class Portofolio:
             size = truncate(size, 0)
         print ("issuing for buying: ", product_id, "size: ", size, "at price: ", price)
 #min hour day
-        if test == False:
-            result = MarketOrderRequest(
-                      symbol=product_id,
-                      qty=size,
-                      side=OrderSide.BUY,
-                      time_in_force=TimeInForce.DAY
+        
+        market_order_data = MarketOrderRequest(
+                    symbol=product_id,
+                    qty=size,
+                    side=OrderSide.BUY,
+                    time_in_force=TimeInForce.GTC
         )
-            print("result of order: {0}".format(result))
+        market_order = api.submit_order(
+                order_data=market_order_data       
+        )
+        portofolio.save_order_to_db(market_order)
+
+        print("result of order: {0}".format(market_order))
 
             
     def issue_sell_order(self, product_id,  price, size = "", test = TEST):
@@ -654,15 +658,19 @@ class Portofolio:
             size = self.get_coin_balance(coin)
             price = truncate(price,3)
             size = truncate(size,3)
+            # here I can do sth better than a simple truncation
             print ("maximum order size to be", size)
-        if test == False:
-            result = MarketOrderRequest(
+            market_order_data = MarketOrderRequest(
                       symbol=product_id,
                       qty=size,
                       side=OrderSide.SELL,
-                      time_in_force=TimeInForce.DAY
-        )
-            print("result of order: {0}".format(result))
+                      time_in_force=TimeInForce.GTC
+            )
+            market_order = api.submit_order(
+                order_data=market_order_data
+            )
+            print("result of order: {0}".format(market_order))
+            portofolio.save_order_to_db(market_order)
             
     def get_nth_day_before_today_historic_rates(self, coin, n):
         pastTime = datetime.datetime.now() - datetime.timedelta(days = n)
