@@ -5,7 +5,7 @@ from alpaca.data.live import CryptoDataStream
 from alpaca.trading.client import TradingClient
 
 from alpaca.trading.requests import (
-    MarketOrderRequest,
+    LimitOrderRequest,
     GetOrdersRequest,
     GetAssetsRequest
 )
@@ -30,6 +30,8 @@ import matplotlib.dates as dates
 from pymongo import MongoClient
 import threading
 import json
+from bson import Binary
+
 
 # set them when the program starts, stream is used for the stream data
 # and history for the historic data
@@ -39,8 +41,8 @@ account = None
 broker = None
 api = None
 quote_list = []
-#taker commision
-comission = 0.015
+#taker commision ( this empirically seems to be the value)
+comission = 0.021
 
 # TO DO
 # 0) prepei na vrw tropo na afairw ta points needed for a move apo to penalties twn lanes
@@ -203,7 +205,8 @@ def truncate(f, n):
     if 'e' in s or 'E' in s:
         return '{0:.{1}f}'.format(f, n)
     i, p, d = s.partition('.')
-    return '.'.join([i, (d+'0'*n)[:n]])
+    result =  '.'.join([i, (d+'0'*n)[:n]])
+    return float(result)
 
 class Lane:
     # horizontal lane, used by the corridor
@@ -297,13 +300,13 @@ class Corridor:
             print("movement is disabled")
             
     def get_high_y(self):
-        return self.upperLane.ydata
+        return float(self.upperLane.ydata)
     
     def get_low_y(self):
-        return self.lowerLane.ydata
+        return float(self.lowerLane.ydata)
     
     def get_median(self):
-        return (self.upperLane.ydata + self.lowerLane.ydata)/2.0
+        return float((self.upperLane.ydata + self.lowerLane.ydata)/2.0)
         
     def draw(self):
         
@@ -491,10 +494,10 @@ class Portofolio:
     def fetch_active_order(self, product_id):
         db_order = None
         try:
-            query = {"product_id":coin, "status": "open"}
+            query = {"symbol":coin, "status": OrderStatus.NEW}
             db_order = db_orders.find(query)[0]   
-        except:
-            pass
+        except Exception as e:
+            print(f"An error occurred while fetching active order: {e}")
         return db_order
     
     def delete_all_orders(self):
@@ -520,20 +523,21 @@ class Portofolio:
                 penalty.decrease_penalty_upper_lane()
         else:
             # change key name to make use of it in db
-            order["_id"] = order.pop("id")
-            result = db_orders.insert_one(order)
-            print("inserted order: {0}".format(result.inserted_id))       
+            result =  self.save_order_to_db(order)
+            print("inserted order: {0}".format(result))       
         
     def get_position(self, coin):
         # '/' not being supported for position calls
         symbol = coin.replace('/', '')
+        self.balance[coin] = 0.0
         try:
             position = api.get_open_position(symbol_or_asset_id=symbol)
             print("position: ", position)
             print("coin: ", position.symbol, "balance:", position.qty)
             self.balance[coin] = position.qty
-        except:
-            pass
+        except Exception as e:
+            print(f"An error occurred while getting balance for coin: {e}")
+
    
     def fetch_orders(self):
         self.delete_all_orders()
@@ -547,7 +551,7 @@ class Portofolio:
             if order.status == OrderStatus.FILLED:
                 pass
             # track open orders in the db
-            elif order.status == OrderStatus.OPEN:
+            elif order.status == OrderStatus.ACCEPTED or order.status == OrderStatus.NEW:
                 self.insert_or_update_order(order)
             
     def handle_order_change(self,  old_order, new_order):
@@ -578,8 +582,8 @@ class Portofolio:
         try:
             query = {"product_id": coin, "status": "open" }
             orders = db_orders.find(query)
-        except:
-            pass
+        except Exception as e:
+            print(f"An error occurred fetching a db order: {e}")
         return list(orders)
     
     def get_side_orders_for_coin_from_db(self, coin, side):
@@ -598,14 +602,15 @@ class Portofolio:
         return self.get_side_orders_for_coin_from_db(coin,"sell")
                                                       
     def get_cash_balance(self):
-        return self.balance["USD"]
+        return float(self.balance["USD"])
 
     def get_coin_balance(self, coin):
         return float(self.balance[coin])
     
     def save_order_to_db(self, order):
+        # Convert the UUID to a BSON Binary object
         order_data = {
-            'id': order.id,
+            '_id': order.id,
             'symbol': order.symbol,
             'qty': order.qty,
             'side': order.side,
@@ -616,24 +621,28 @@ class Portofolio:
             'created_at': order.created_at,
             'updated_at': order.updated_at
         }
-        db_orders.insert_one(order_data)    
+        result = db_orders.insert_one(order_data)
+        return result.inserted_id    
 
     def issue_buy_order(self, product_id,  price, size = "", test = TEST):
-        
         cash_balance = self.get_cash_balance()
         print("cash balance:", cash_balance )
         
+        if (price > 1000): #avoid truncating prices of very small coins
+            price = truncate(price,1)
+            print("truncate price to: ", price)
+        elif (price > 100):
+            price = truncate(price,2)
+            print("truncate price to: ", price)
+
         if size=="":
-            #size = (cash_balance * 0.995) / price
-            size = cash_balance / price
-            # if price > 1.0 : #avoid truncating prices of very small coins
-            #     price = truncate(price,2)
-            #     print("truncate price to: ", price)
-            print ("maximum size calculated to be", size)
+            size = (cash_balance / float(price)) * (1 - float(comission))
+            size = truncate(size,4)
+            print("truncate size to: ", size)
         asset = portofolio.get_asset(product_id)
         # here I can do sth better than a simple truncation
 
-        if size < asset.min_order_size:
+        if size < float(asset.min_order_size):
             print("size is considered too small for alpaca, skipping to avoid penalties")
             return
             
@@ -642,19 +651,22 @@ class Portofolio:
         print ("issuing for buying: ", product_id, "size: ", size, "at price: ", price)
 #min hour day
         
-        market_order_data = MarketOrderRequest(
+        market_order_data = LimitOrderRequest(
                     symbol=product_id,
                     qty=size,
                     side=OrderSide.BUY,
-                    time_in_force=TimeInForce.GTC
+                    time_in_force=TimeInForce.GTC,
+                    limit_price = price
         )
         market_order=None
         try:
             market_order = api.submit_order(
                 order_data=market_order_data
             )
-        except:
-            pass
+
+        except Exception as e:
+            print(f"An error occurred while performing a buy order: {e}")
+
         if market_order!=None:
             portofolio.save_order_to_db(market_order)
 
@@ -678,22 +690,24 @@ class Portofolio:
             asset = portofolio.get_asset(product_id)
             # here I can do sth better than a simple truncation
             print ("maximum order size to be", size)
-            if size < asset.min_order_size:
+            if size < float(asset.min_order_size):
                 print("size is considered too small for alpaca, skipping to avoid penalties")
                 return
-            market_order_data = MarketOrderRequest(
+            market_order_data = LimitOrderRequest(
                       symbol=product_id,
                       qty=size,
                       side=OrderSide.SELL,
-                      time_in_force=TimeInForce.GTC
+                      time_in_force=TimeInForce.GTC,
+                      limit_price = price
             )
             market_order=None
             try:
                 market_order = api.submit_order(
                     order_data=market_order_data
                 )
-            except:
-                pass
+            except Exception as e:
+                print(f"An error occurred while performing a sell order: {e}")
+
             print("result of order: {0}".format(market_order))
             if market_order!=None:
                 portofolio.save_order_to_db(market_order)
@@ -867,7 +881,7 @@ def start(*args, **kwargs):
         if current_price > (corridor.get_high_y() + corridor.get_low_y())/2 :
             print("price is above the middle")
             sell_orders = portofolio.get_sell_orders_for_coin_from_db(coin)
-            if len(sell_orders) == 0:
+            if len(sell_orders) == 0 and portofolio.get_coin_balance(current_message.symbol) > 0.0:
                 print("Price above median lane but no active sell orders; issuing sell order and passing")
                 # there is balance in that coin
                 if portofolio.get_coin_balance(current_message.symbol) > 0.0: 
@@ -937,7 +951,7 @@ else:
 
 
 # initiate database
-mongo_client = MongoClient('mongodb://localhost:27017/')
+mongo_client = MongoClient('mongodb://localhost:27017/?uuidRepresentation=standard')
 
 db = mongo_client.cryptocurrency_database
 
