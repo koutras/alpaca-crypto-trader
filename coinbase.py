@@ -39,6 +39,8 @@ account = None
 broker = None
 api = None
 quote_list = []
+#taker commision
+comission = 0.015
 
 # TO DO
 # 0) prepei na vrw tropo na afairw ta points needed for a move apo to penalties twn lanes
@@ -249,8 +251,8 @@ class Corridor:
         elif new_upper_lane < self.lowerLane.get_y():
             new_upper_lane = self.get_median()
             # make a small correction, change
-            while self.lowerLane.get_y() * 1.005 >  new_upper_lane:
-                new_upper_lane = new_upper_lane * 1.002
+            while self.lowerLane.get_y() * (1 + comission) >  new_upper_lane:
+                new_upper_lane = new_upper_lane * 1 + portofolio.get_asset(coin).min_trade_increment
             print("increasing selling price to be over buying price from", self.upperLane.get_y(), "to ",new_upper_lane)
             self.upperLane.set_y(new_upper_lane)
 
@@ -525,10 +527,13 @@ class Portofolio:
     def get_position(self, coin):
         # '/' not being supported for position calls
         symbol = coin.replace('/', '')
-        position = api.get_open_position(symbol_or_asset_id=symbol)
-        print("position: ", position)
-        print("coin: ", position.symbol, "balance:", position.qty)
-        self.balance[coin] = position.qty
+        try:
+            position = api.get_open_position(symbol_or_asset_id=symbol)
+            print("position: ", position)
+            print("coin: ", position.symbol, "balance:", position.qty)
+            self.balance[coin] = position.qty
+        except:
+            pass
    
     def fetch_orders(self):
         self.delete_all_orders()
@@ -596,9 +601,9 @@ class Portofolio:
         return self.balance["USD"]
 
     def get_coin_balance(self, coin):
-            return float(self.balance[coin])
+        return float(self.balance[coin])
     
-    def save_order_to_db(order):
+    def save_order_to_db(self, order):
         order_data = {
             'id': order.id,
             'symbol': order.symbol,
@@ -612,23 +617,26 @@ class Portofolio:
             'updated_at': order.updated_at
         }
         db_orders.insert_one(order_data)    
-                       
+
     def issue_buy_order(self, product_id,  price, size = "", test = TEST):
         
         cash_balance = self.get_cash_balance()
         print("cash balance:", cash_balance )
         
         if size=="":
-            size = (cash_balance * 0.995) / price
+            #size = (cash_balance * 0.995) / price
+            size = cash_balance / price
+            # if price > 1.0 : #avoid truncating prices of very small coins
+            #     price = truncate(price,2)
+            #     print("truncate price to: ", price)
             print ("maximum size calculated to be", size)
-            
-        if size < 0.01:
-            print("size is considered too small for coinbase, skipping to avoid penalties")
+        asset = portofolio.get_asset(product_id)
+        # here I can do sth better than a simple truncation
+
+        if size < asset.min_order_size:
+            print("size is considered too small for alpaca, skipping to avoid penalties")
             return
-        if price > 1.0 : #avoid truncating prices of very small coins
-            price = truncate(price,2)
- 
-        size = truncate(size,1)
+            
         if float(size) > 1000.0:
             size = truncate(size, 0)
         print ("issuing for buying: ", product_id, "size: ", size, "at price: ", price)
@@ -640,37 +648,55 @@ class Portofolio:
                     side=OrderSide.BUY,
                     time_in_force=TimeInForce.GTC
         )
-        market_order = api.submit_order(
-                order_data=market_order_data       
-        )
-        portofolio.save_order_to_db(market_order)
+        market_order=None
+        try:
+            market_order = api.submit_order(
+                order_data=market_order_data
+            )
+        except:
+            pass
+        if market_order!=None:
+            portofolio.save_order_to_db(market_order)
 
         print("result of order: {0}".format(market_order))
 
             
     def issue_sell_order(self, product_id,  price, size = "", test = TEST):
-        print ("issuing for selling: ", product_id, "size: ", size, "at price: ", price)
+        if size=="":
+            how_much = "all"
+        else:
+            how_much = size
+        print ("issuing for selling: ", product_id, "size: ", how_much, "at price: ", price)
 
         if price > 1.0 : #avoid truncating prices of very small coins
             price = truncate(price,2)        
         
         if size=="":
-            size = self.get_coin_balance(coin)
-            price = truncate(price,3)
-            size = truncate(size,3)
+            size = self.get_coin_balance(product_id)
+            # price = truncate(price,3)
+            # size = truncate(size,3)
+            asset = portofolio.get_asset(product_id)
             # here I can do sth better than a simple truncation
             print ("maximum order size to be", size)
+            if size < asset.min_order_size:
+                print("size is considered too small for alpaca, skipping to avoid penalties")
+                return
             market_order_data = MarketOrderRequest(
                       symbol=product_id,
                       qty=size,
                       side=OrderSide.SELL,
                       time_in_force=TimeInForce.GTC
             )
-            market_order = api.submit_order(
-                order_data=market_order_data
-            )
+            market_order=None
+            try:
+                market_order = api.submit_order(
+                    order_data=market_order_data
+                )
+            except:
+                pass
             print("result of order: {0}".format(market_order))
-            portofolio.save_order_to_db(market_order)
+            if market_order!=None:
+                portofolio.save_order_to_db(market_order)
             
     def get_nth_day_before_today_historic_rates(self, coin, n):
         pastTime = datetime.datetime.now() - datetime.timedelta(days = n)
@@ -742,14 +768,18 @@ class Portofolio:
                 print("account: ", balance , "currency:", account.currency)
             self.balance[account.currency] = balance
         print("cash balance is: ", self.balance)
+        return balance
 
-    def get_assets(self):
+    def api_get_assets(self):
         # not sure what this does
         search_params = GetAssetsRequest(asset_class=AssetClass.CRYPTO)
         assets = api.get_all_assets(search_params)
         for asset in assets:
             self.assets[asset.symbol] = asset
             print("asset: ", asset)
+
+    def get_asset(self, symbol):
+        return self.assets[symbol]
 
     def refresh_portofolio_and_orders(self):
         self.get_balance()
@@ -808,6 +838,8 @@ def start(*args, **kwargs):
         
         sell_orders = portofolio.get_sell_orders_for_coin_from_db(coin)
         buy_orders = portofolio.get_buy_orders_for_coin_from_db(coin)
+        # an asset is basically limits for a coin, min order, lowest price increment
+        asset = portofolio.get_asset(coin)
         
         if len(sell_orders):
             for order in sell_orders:
@@ -815,7 +847,7 @@ def start(*args, **kwargs):
                 estimated_order_worth = estimated_order_worth + portofolio.get_order_winnings(order)     
                 print("order with status: ", order["status"], "actual worth: ", current_worth, " estimated_worth ", estimated_order_worth )
         else:
-            if portofolio.get_coin_balance(current_message.symbol) > 0.0:
+            if portofolio.get_coin_balance(current_message.symbol) > asset.min_order_size:
                 portofolio.issue_sell_order(current_message.symbol, corridor.get_high_y())
                 
         if len(buy_orders):
@@ -951,7 +983,7 @@ portofolio.get_balance()
 portofolio.get_position(coin)
 
 # store minimum order size etc
-portofolio.get_assets()
+portofolio.api_get_assets()
 
 print ("balance on this coin is: ", portofolio.get_coin_balance(coin))
 portofolio.fetch_orders()
