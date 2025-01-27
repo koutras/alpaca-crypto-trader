@@ -3,6 +3,8 @@ from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.client import TradingClient
 from alpaca.data.live import CryptoDataStream
 from alpaca.trading.client import TradingClient
+import tkinter as tk
+from tkinter import ttk
 
 from alpaca.trading.requests import (
     LimitOrderRequest,
@@ -624,7 +626,7 @@ class Portofolio:
         result = db_orders.insert_one(order_data)
         return result.inserted_id    
 
-    def issue_buy_order(self, product_id,  price, size = "", test = TEST):
+    def issue_buy_order(self, product_id,  price, size = 0.0, test = TEST):
         cash_balance = self.get_cash_balance()
         print("cash balance:", cash_balance )
         
@@ -635,14 +637,14 @@ class Portofolio:
             price = truncate(price,2)
             print("truncate price to: ", price)
 
-        if size=="":
+        if size==0.0:
             size = (cash_balance / float(price)) * (1 - float(comission))
             size = truncate(size,4)
             print("truncate size to: ", size)
         asset = portofolio.get_asset(product_id)
         # here I can do sth better than a simple truncation
 
-        if size < float(asset.min_order_size):
+        if float(size) < float(asset.min_order_size):
             print("size is considered too small for alpaca, skipping to avoid penalties")
             return
             
@@ -957,8 +959,35 @@ db = mongo_client.cryptocurrency_database
 
 db_orders = db["orders"]
 
+coins = ["MIR/USD","SHIB/USD", "XTZ/USD", "AVAX/USD","1INCH/USD","MATIC/USD","CRV/USD","ICP/USD","FORTH/USD","SKL/USD","ANKR/USD","LTC/USD","BCH/USD", "BNT/USD", "UMA/USD","NMR/USD", "XLM/USD", "OMG/USD", "LINK/USD", "BAND/USD", "NU/USD", "FIL/USD", "ALGO/USD", "GRT/USD", "ETC/USD", "BTC/USD", "SNX/USD"]
+
+# Create the main window
+root = tk.Tk()
+root.title("Select Coin")
+
+# Create a StringVar to hold the selected coin
+selected_coin = tk.StringVar()
+
+# Create the dropdown menu
+dropdown = ttk.Combobox(root, textvariable=selected_coin, values=coins)
+dropdown.grid(column=0, row=0)
+dropdown.current(0)  # Set default selection
+
 coin = ""
-while coin not in ["MIR/USD","SHIB/USD", "XTZ/USD", "AVAX/USD","1INCH/USD","MATIC/USD","CRV/USD","ICP/USD","FORTH/USD","SKL/USD","ANKR/USD","LTC/USD","BCH/USD", "BNT/USD", "UMA/USD","NMR/USD", "XLM/USD", "OMG/USD", "LINK/USD", "BAND/USD", "NU/USD", "FIL/USD", "ALGO/USD", "GRT/USD", "ETC/USD", "BTC/USD", "SNX/USD"]:   
+# Function to handle selection
+def on_select(event):
+    coin = selected_coin.get()
+    print("coin is: ", coin)
+    db_ticks = db[coin]
+    root.quit()  # Close the GUI window
+
+# Bind the selection event
+dropdown.bind("<<ComboboxSelected>>", on_select)
+
+# Run the GUI event loop
+root.mainloop()
+
+while coin not in coins:   
     coin = input("Give input coin: ") or "BTC/USD"
 
 print("coin is: ", coin)
