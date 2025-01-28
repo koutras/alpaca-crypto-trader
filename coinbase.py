@@ -45,32 +45,30 @@ api = None
 quote_list = []
 #taker commision ( this empirically seems to be the value)
 comission = 0.021
+default_currency = "USD"
 
 # TO DO
 # 0) prepei na vrw tropo na afairw ta points needed for a move apo to penalties twn lanes
-# 1) dropdown for the currencies
-# 2) function to gather historic data for up to a year for analysis
+# 1) dropdown for the currencies - done
+# 2) function to gather historic data for up to a year for analysis in df (historic button?)
 # 3) show the ability to move up down and expand
-# 4) display overlayed ema 12 and ema 16
-# 5) give the ability to stop selling/buying after for example after 10 sells
+# 4) display overlayed ema 12 and ema 16 -> seperate buttons, RSI, MACD, Bollinger bands sounds promissing
+# 5) give the ability to stop selling/buying after for example after 10 sells (button with a counter)
 # 6) display total balance / balance in sell orders/ balance in buy orders
 # 7) cancel active sell/buy order
 # 8) create a terminal only version
-# 9) separate instances for different coins
-# 10) find most frequent values in a period
+# 9) separate instances for different coins--> $$$
+# 10) find most frequent values in a period --> $$$
 # 11) verify that the commision in large euro quantity stands and create a function
 # 12) display current price value
-# 13) show current order as a horizontal line with color
+# 13) show current order as a horizontal line with color, helpful in case of moving the lanes
 
-# possible input /
 
 
 # dialegeis xroniko diasthma 5-10-15 leptwn
 # vriskeis tis poio syxna xrhsimopoioumenew times
 # dialegeis thn megalyterh kai thn mikroterh
 # dialegeis to meso oro
-
-# fees after every order completed  ~0.0035%
 
 TEST = True  # when false perform actual order with money
 # used to stop program execution
@@ -158,7 +156,7 @@ class Penalty:
             print("current price over selling price")
             self.increase_penalty_lower_lane()
 
-        # if current price is consistently above upper lane and about to buy, consider decreasing upper lane     
+        # if current price is consistently below lower lane and about to buy, consider decreasing upper lane     
         if self.current_price < self.lower_lane_y:
             print("current price lower that buying price")
             self.increase_penalty_upper_lane()
@@ -591,8 +589,9 @@ class Portofolio:
     def get_side_orders_for_coin_from_db(self, coin, side):
         orders = []
         try:
-            query = {"product_id": coin, "status": "open", "side":side }
+            query = {"product_id": coin, "status": OrderStatus.PENDING_NEW, "side":side }
             orders = db_orders.find(query)
+            print ("retrieved db orders: ", orders, "side:", side)
         except:
             pass
         return list(orders)
@@ -604,13 +603,12 @@ class Portofolio:
         return self.get_side_orders_for_coin_from_db(coin,"sell")
                                                       
     def get_cash_balance(self):
-        return float(self.balance["USD"])
+        return float(self.balance[default_currency])
 
     def get_coin_balance(self, coin):
         return float(self.balance[coin])
     
     def save_order_to_db(self, order):
-        # Convert the UUID to a BSON Binary object
         order_data = {
             '_id': order.id,
             'symbol': order.symbol,
@@ -775,7 +773,7 @@ class Portofolio:
 
     def get_balance(self):
         # assuming that we trade only currencies with euro
-        print("getting balances")
+        print("getting cash balance")
         account = api.get_account()
         balance = 0.0
         if float(account.cash) > 0:
@@ -813,8 +811,6 @@ def stop_execution(*args, **kwargs):
 def start(*args, **kwargs):
     global STOP_EXECUTION
     STOP_EXECUTION = False
-    # Start the WebSocket client
-   # board.clear_board_values()
     print("starting the websocket, good luck!!")
     penalty.initialize(corridor)
     
@@ -1043,15 +1039,6 @@ bstart = Button(axstart, 'Start')
 bhello = Button(axhello, 'Lanes')
 bstop = Button(axstop, 'Stop')
 bhistoric = Button(axhistoric_rates, 'Historic')
-
-# widgets.Select(
-#     options=['1', '2', '3'],
-#     value='2',
-#     description='Number:',
-#     disabled=False,
-# )
-
-
 
 bhello.on_clicked(handler)
 bstart.on_clicked(start_main_loop)
