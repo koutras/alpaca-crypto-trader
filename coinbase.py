@@ -46,6 +46,7 @@ quote_list = []
 #taker commision ( this empirically seems to be the value)
 comission = 0.021
 default_currency = "USD"
+coin = ""
 
 # TO DO
 # 0) prepei na vrw tropo na afairw ta points needed for a move apo to penalties twn lanes
@@ -504,11 +505,11 @@ class Portofolio:
         db_orders.delete_many({})
     
     def delete_order_from_db(self, order):
-        query = {'_id':order["id"]}
+        query = {'id':order.id}
         db_orders.delete_one(query)
        
     def insert_or_update_order(self, order):
-        query = {'_id':order.id}
+        query = {'id':order.id}
         old_order = db_orders.find_one(query)
         if old_order != None:
             print ("order exists in database {0}".format(old_order))
@@ -546,12 +547,13 @@ class Portofolio:
             symbols = [coin]
         )
         orders = api.get_orders(req)
+        active_order = self.fetch_active_order(coin)
         for order in orders:
             print ("order is: ", order)
-            if order.status == OrderStatus.FILLED:
+            if order.status == OrderStatus.FILLED and active_order != None:
                 pass
             # track open orders in the db
-            elif order.status == OrderStatus.ACCEPTED or order.status == OrderStatus.NEW:
+            elif order.status == OrderStatus.ACCEPTED or order.status == OrderStatus.NEW or active_order == None:
                 self.insert_or_update_order(order)
             
     def handle_order_change(self,  old_order, new_order):
@@ -580,7 +582,7 @@ class Portofolio:
     def get_open_orders_for_coin_from_db(self, coin):
         orders = []
         try:
-            query = {"product_id": coin, "status": "open" }
+            query = {"symbol": coin, "status": OrderStatus.NEW }
             orders = db_orders.find(query)
         except Exception as e:
             print(f"An error occurred fetching a db order: {e}")
@@ -589,7 +591,7 @@ class Portofolio:
     def get_side_orders_for_coin_from_db(self, coin, side):
         orders = []
         try:
-            query = {"product_id": coin, "status": OrderStatus.PENDING_NEW, "side":side }
+            query = {"symbol": coin, "status": OrderStatus.NEW, "side":side }
             orders = db_orders.find(query)
             print ("retrieved db orders: ", orders, "side:", side)
         except:
@@ -610,7 +612,7 @@ class Portofolio:
     
     def save_order_to_db(self, order):
         order_data = {
-            '_id': order.id,
+            'id': order.id,
             'symbol': order.symbol,
             'qty': order.qty,
             'side': order.side,
@@ -972,21 +974,22 @@ dropdown.current(0)  # Set default selection
 coin = ""
 # Function to handle selection
 def on_select(event):
+    global coin
     coin = selected_coin.get()
     print("coin is: ", coin)
     db_ticks = db[coin]
     root.quit()  # Close the GUI window
 
-# Bind the selection event
-dropdown.bind("<<ComboboxSelected>>", on_select)
 
-# Run the GUI event loop
-root.mainloop()
 
-while coin not in coins:   
-    coin = input("Give input coin: ") or "BTC/USD"
+while coin not in coins:
+    # Bind the selection event
+    dropdown.bind("<<ComboboxSelected>>", on_select)
+    # Run the GUI event loop
+    root.mainloop()
+    print("coin selected: ", coin)   
+    #coin = input("Give input coin: ") or "BTC/USD"
 
-print("coin is: ", coin)
 db_ticks = db[coin]
 
 enable_movement = "n"
