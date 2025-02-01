@@ -5,6 +5,8 @@ from alpaca.data.live import CryptoDataStream
 from alpaca.trading.client import TradingClient
 import tkinter as tk
 from tkinter import ttk
+import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
 
 from alpaca.trading.requests import (
     LimitOrderRequest,
@@ -33,6 +35,11 @@ from pymongo import MongoClient
 import threading
 import json
 from bson import Binary
+
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
 
 
 # set them when the program starts, stream is used for the stream data
@@ -63,7 +70,8 @@ coin = ""
 # 11) verify that the commision in large euro quantity stands and create a function
 # 12) display current price value
 # 13) show current order as a horizontal line with color, helpful in case of moving the lanes
-
+# 14) # cancel a active sell order ---> lose x points
+# cancel an active buy order ---> 
 
 
 # dialegeis xroniko diasthma 5-10-15 leptwn
@@ -78,6 +86,156 @@ STOP_EXECUTION = False
 # todo 
 #create a watchlist, alarms etc
 # get all historic rates and put them in a db
+
+class LSTM_Model:
+    def __init__(self):
+        self.model = None
+        self.data = None
+        self.X = []
+        self.y = []
+        self.scaler = MinMaxScaler()
+        self.close_scaler = None
+        self.seq_length = 24
+        self.X_train = None
+        self.X_test = None
+        self.y_train = None
+        self.y_test = None
+        self.predictions = None
+        self.predictions_actual = None
+        self.data_scaled = None
+        self.test_actual = None
+
+    def normalize_data(self):
+        #data_scaled = scaler.fit_transform(data[['close', 'volume', 'MA_12']])
+        self.data_scaled = self.scaler.fit_transform(self.data[['close']])
+    
+    def build_lstm_model(self):
+        # Build lstm model
+
+        # disable gpu as I have amd gpu
+        import os
+        os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # Disable GPU
+        print("X:", self.X[:5], "...")
+
+        # Define the model
+        model = Sequential()
+
+        # Add LSTM layers
+        model.add(LSTM(units=64, return_sequences=True, input_shape=(self.X.shape[1], self.X.shape[2])))
+        model.add(Dropout(0.2))
+        model.add(LSTM(units=64, return_sequences=False))
+        model.add(Dropout(0.2))
+
+        # Add a Dense output layer
+        model.add(Dense(units=1))  # Predicts the next hour's price
+
+        # Compile the model
+        model.compile(optimizer='adam', loss='mean_squared_error')
+    
+    def train_the_model(self):
+        # Split data
+        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(self.X, self.y, test_size=0.2, shuffle=False)
+
+        # Train the model
+        self.model.fit(self.X_train, self.y_train, epochs=50, batch_size=32, validation_data=(self.X_test, self.y_test))
+    
+    def evaluate_the_model(self):
+        # Evaluate the model
+        # Make predictions
+        predictions = self.model.predict(self.X_test)
+        print("X_test:", self.X_test)
+        print("Shape of predictions:", predictions.shape)
+        print("First few predictions:", predictions[:5])
+
+        # Create a new scaler for the 'Close' price only
+        self.close_scaler = MinMaxScaler()
+        self.close_scaler.fit(self.data[['close']])  # Fit on the 'Close' column only
+
+        print("close_scaler data min:", self.close_scaler.data_min_)
+        print("close_scaler data max:", self.close_scaler.data_max_)
+
+        predictions_actual = self.close_scaler.inverse_transform(predictions)
+
+        dummy_columns = np.zeros((self.y_test.shape[0], 2))  # Add 2 dummy columns
+        y_test_with_dummy = np.hstack((self.y_test.reshape(-1, 1), dummy_columns))
+
+        # Inverse transform
+        self.y_test_actual = self.scaler.inverse_transform(y_test_with_dummy)[:, 0]  # Extract the first column
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(self.y_test_actual, color='blue', label='Actual BTC Price')
+        plt.plot(predictions_actual, color='red', label='Predicted BTC Price')
+        plt.title('BTC Price Prediction')
+        plt.xlabel('Time')
+        plt.ylabel('Price')
+        plt.legend()
+        plt.show()
+    
+    def make_prediction(self):
+
+        future_steps = 100
+
+        sequence_length = self.seq_length
+
+        # Create an array to hold the future predictions
+        future_predictions = []
+
+        # Start with the last sequence of your test data
+        last_sequence = self.X_test[-1]
+
+        print("shapes")
+        print("shape: ", self.X_test.shape[1])
+
+        for _ in range(future_steps):
+            # Reshape the last sequence to match the input shape of the model
+            input_sequence = last_sequence.reshape((1, sequence_length, self.X_test.shape[2]))
+            
+            # Predict the next value
+            next_prediction = self.model.predict(input_sequence)
+            
+            # Append the prediction to the future predictions list
+            future_predictions.append(next_prediction[0])
+            
+            # Update the last sequence to include the new prediction
+            last_sequence = np.append(last_sequence[1:], next_prediction, axis=0)
+
+        # Convert future predictions to a numpy array
+        future_predictions = np.array(future_predictions)
+
+        # Step 2: Inverse Transform the Predictions
+        # Assuming you have a scaler for the 'Close' price
+        future_predictions_actual = self.close_scaler.inverse_transform(future_predictions)
+
+        # Step 3: Plot the Results
+        # Create a time axis for the future predictions
+        future_time = np.arange(len(self.y_test_actual), len(self.y_test_actual) + future_steps)
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(self.y_test_actual, color='blue', label='Actual BTC Price')
+        plt.plot(future_time, future_predictions_actual, color='green', label='Predicted Future BTC Price')
+        plt.title('BTC Price Prediction')
+        plt.xlabel('Time')
+        plt.ylabel('Price')
+        plt.legend()
+        plt.show()
+
+    
+    def create_data_sequence(self):
+        for i in range(len(self.data_scaled) - self.seq_length):
+            self.X.append(self.data_scaled[i:i+self.seq_length])
+            self.y.append(self.data_scaled[i+self.seq_length, 0])  # Predict the 'Close' price
+        return np.array(self.X), np.array(self.y)
+
+
+    def get_prediction(self, df):
+        df.to_csv('btc_min.csv', index=False)
+        self.data = pd.read_csv('btc_min.csv')
+        self.normalize_data()
+        self.create_data_sequence()
+        self.build_lstm_model()
+        self.train_the_model()
+        self.evaluate_the_model()
+        self.make_prediction()
 
 class Penalty:
     def initialize(self, corridor):
@@ -215,10 +373,11 @@ class Lane:
         self.axes = figure.axes[0]
         self.ydata = None
         self.reference = None
+        self.color = "red"
 
     def draw(self):
         print("drawing lane y: ", self.ydata)
-        self.reference = self.axes.axhline(self.ydata, color="red")
+        self.reference = self.axes.axhline(self.ydata, color=self.color)
         plt.draw()
         
     def get_y(self):
@@ -226,6 +385,9 @@ class Lane:
     
     def set_y(self,y):
         self.ydata = y
+    
+    def set_color(self, color):
+        self.color = color
 
     def remove(self):
         self.reference.remove()
@@ -236,9 +398,16 @@ class Corridor:
     def __init__(self, figure):
         self.upperLane = Lane(figure)
         self.lowerLane = Lane(figure)
+        self.activeLane= Lane(figure).set_color("green")
         self.figure = figure
         self.axes = figure.axes[0]
         self.cid = None
+    
+    def draw_active_order(self, order, colour="blue"):
+        if order == None:
+            return
+        self.activeLane.set_y(order.limit_price)
+        self.activeLane.draw("green")
         
     def move_upper_lane(self, percentage, current_price, only_upwards = False):
         print(" move upper lane percentage: ", percentage)
@@ -315,9 +484,6 @@ class Corridor:
         if (self.cid == None):
             self.cid = self.figure.canvas.mpl_connect('button_press_event', self)
             print ("click to set up the lanes and press right click when done")
-
-# cancel a active sell order ---> lose x points
-# cancel an active buy order ---> 
             
     def __call__(self, event):
         print('click', event)
@@ -465,6 +631,8 @@ class Portofolio:
         self.balance = {}
         self.message_list = []
         self.quote_list = []
+        self.df = None
+        self.model = None
 
     def get_message_list(self):
         return self.message_list   
@@ -490,13 +658,15 @@ class Portofolio:
         
     def get_order_winnings(self, order):
         ''' Get Potential Winnings of order'''
-        return float(order["size"]) * float(order["price"])
+        return float(order["qty"]) * float(order["limit_price"])
     
     def fetch_active_order(self, product_id):
         db_order = None
         try:
-            query = {"symbol":coin, "status": OrderStatus.NEW}
-            db_order = db_orders.find(query)[0]   
+            for query in [{"symbol":product_id, "status": OrderStatus.NEW}, {"symbol":product_id, "status": OrderStatus.ACCEPTED}]:
+                db_order = db_orders.find(query)[0]
+                if db_order != None:
+                    break
         except Exception as e:
             print(f"An error occurred while fetching active order: {e}")
         return db_order
@@ -548,6 +718,9 @@ class Portofolio:
         )
         orders = api.get_orders(req)
         active_order = self.fetch_active_order(coin)
+        if active_order != None:
+            corridor.draw_active_order(active_order)
+
         for order in orders:
             print ("order is: ", order)
             if order.status == OrderStatus.FILLED and active_order != None:
@@ -560,14 +733,14 @@ class Portofolio:
        # balance has changed, refresh
        self.refresh_portofolio_and_orders()
        cash_balance = self.get_cash_balance()
-       if new_order["status"] == "closed":
-           if old_order["status"] == "open":
+       if new_order["status"] == OrderStatus.FILLED:
+           if old_order["status"] in [OrderStatus.NEW, OrderStatus.PENDING_NEW]:
                # old order is no more needed
                self.delete_order_from_db(old_order)
                if old_order["side"] == "buy":
                    print(" Bought; placing a sell order")
                    if (cash_balance > 1):
-                       self.issue_sell_order(new_order["product_id"], corridor.get_high_y())
+                       self.issue_sell_order(new_order["symbol"], corridor.get_high_y())
                       
 
                elif old_order.side =="sell":
@@ -621,12 +794,15 @@ class Portofolio:
             'status': order.status,
             'filled_qty': order.filled_qty,
             'created_at': order.created_at,
-            'updated_at': order.updated_at
+            'updated_at': order.updated_at,
+            'limit_price': order.limit_price,
+            
         }
         result = db_orders.insert_one(order_data)
-        return result.inserted_id    
+        return result.inserted_id
+    
 
-    def issue_buy_order(self, product_id,  price, size = 0.0, test = TEST):
+    def issue_buy_order(self, product_id,  price, size = 0.0):
         cash_balance = self.get_cash_balance()
         print("cash balance:", cash_balance )
         
@@ -675,7 +851,7 @@ class Portofolio:
         print("result of order: {0}".format(market_order))
 
             
-    def issue_sell_order(self, product_id,  price, size = "", test = TEST):
+    def issue_sell_order(self, product_id,  price, size = ""):
         if size=="":
             how_much = "all"
         else:
@@ -742,7 +918,7 @@ class Portofolio:
 
         print ("Coin: {0} rates: {1}".format(coin, self.rates[coin]))
 # takes insufficient funds
-    def get_historic_rates(self, coin, hoursBefore = 220):
+    def get_historic_rates(self, coin, hoursBefore = 100):
         pastTime = datetime.datetime.now() - datetime.timedelta(hours=hoursBefore)
         self.pastTime = pastTime
         pastTime = pastTime.isoformat()
@@ -751,7 +927,7 @@ class Portofolio:
 
         request_params = CryptoBarsRequest(
                         symbol_or_symbols=[coin],
-                        timeframe=TimeFrame.Hour,
+                        timeframe=TimeFrame.Minute,
                         start=pastTime
                  )
         
@@ -759,10 +935,11 @@ class Portofolio:
         
         print ("Historic data received {0}", bars)
         print( "turned to df {0}", bars.df)
+        self.df = bars.df
         # have to get the rates here
         self.rates[coin] = bars[coin]
         print ("Coin: {0} rates: {1}".format(coin, self.rates[coin]))
-
+    
     def draw_historic_rates(self, coin):
         closing_prices = []
         times = []
@@ -773,8 +950,8 @@ class Portofolio:
         self.axes.xaxis.set_major_formatter(dates.DateFormatter("%d-%m %H:%M"))
         board.draw()
 
-    def get_balance(self):
-        # assuming that we trade only currencies with euro
+    def get_cash_balance(self):
+        # assuming that we trade only currencies with usd
         print("getting cash balance")
         account = api.get_account()
         balance = 0.0
@@ -793,12 +970,13 @@ class Portofolio:
         for asset in assets:
             self.assets[asset.symbol] = asset
             print("asset: ", asset)
+        return assets
 
     def get_asset(self, symbol):
         return self.assets[symbol]
 
     def refresh_portofolio_and_orders(self):
-        self.get_balance()
+        self.get_cash_balance()
         self.fetch_orders()
 
 def handler(*args, **kwargs):
@@ -939,16 +1117,15 @@ BASE_URL = 'https://paper-api.alpaca.markets'  # Use 'https://api.alpaca.markets
 
 
 history = CryptoHistoricalDataClient(API_KEY_LIVE, API_SECRET_LIVE)
-
+stream = CryptoDataStream(API_KEY_PAPER, API_SECRET_PAPER)
+# will have to see if the paper api_key works
 # set this via global variable on top
 if TEST:
     api = TradingClient(API_KEY_PAPER, API_SECRET_PAPER)
-    stream = CryptoDataStream(API_KEY_PAPER, API_SECRET_PAPER)
 
 else:
-    api = TradingClient(API_KEY_LIVE, API_SECRET_LIVE)
-    stream = CryptoDataStream(API_KEY_LIVE, API_SECRET_LIVE)
-
+    api = TradingClient(API_KEY_LIVE, API_SECRET_LIVE, paper=False)
+    #stream = CryptoDataStream(API_KEY_LIVE, API_SECRET_LIVE)
 
 # initiate database
 mongo_client = MongoClient('mongodb://localhost:27017/?uuidRepresentation=standard')
@@ -957,8 +1134,35 @@ db = mongo_client.cryptocurrency_database
 
 db_orders = db["orders"]
 
-coins = ["MIR/USD","SHIB/USD", "XTZ/USD", "AVAX/USD","1INCH/USD","MATIC/USD","CRV/USD","ICP/USD","FORTH/USD","SKL/USD","ANKR/USD","LTC/USD","BCH/USD", "BNT/USD", "UMA/USD","NMR/USD", "XLM/USD", "OMG/USD", "LINK/USD", "BAND/USD", "NU/USD", "FIL/USD", "ALGO/USD", "GRT/USD", "ETC/USD", "BTC/USD", "SNX/USD"]
+# all the elements will need the figure
+figure = plt.figure(figsize=(8,6))
 
+portofolio = Portofolio(figure, api)
+
+corridor  = Corridor(figure)
+penalty = Penalty()
+board = Board(figure)
+
+async def on_bar(data):
+    portofolio.add_message(data)
+    print(f"Bar data: {data}")
+
+async def on_quote(data):
+    portofolio.add_quote(data)
+    print(f"Quote: {data}")
+
+# Subscribe to bar data for the specified cryptocurrency
+stream.subscribe_bars(on_bar, coin)
+# leave this for now until we can use it
+#stream.subscribe_quotes(on_quote, coin)
+
+
+# get different coins, store minimum order size etc
+assets = portofolio.api_get_assets()
+coins = []
+for asset in assets:
+    coins.append(asset.symbol)
+coins.sort()
 # Create the main window
 root = tk.Tk()
 root.title("Select Coin")
@@ -980,8 +1184,6 @@ def on_select(event):
     db_ticks = db[coin]
     root.quit()  # Close the GUI window
 
-
-
 while coin not in coins:
     # Bind the selection event
     dropdown.bind("<<ComboboxSelected>>", on_select)
@@ -993,39 +1195,17 @@ while coin not in coins:
 db_ticks = db[coin]
 
 enable_movement = "n"
-enable_movement = input ("enable movement (use it at your own risk) (y/n) ?: ")
-
-async def on_bar(data):
-    portofolio.add_message(data)
-    print(f"Bar data: {data}")
-
-async def on_quote(data):
-    portofolio.add_quote(data)
-    print(f"Quote: {data}")
-
-
-
-# Subscribe to bar data for the specified cryptocurrency
-stream.subscribe_bars(on_bar, coin)
-# leave this for now until we can use it
-#stream.subscribe_quotes(on_quote, coin)
-
-# all the elements will need the figure
-figure = plt.figure(figsize=(8,6))
-
-portofolio = Portofolio(figure, api)
-corridor  = Corridor(figure)
-penalty = Penalty()
-board = Board(figure)
+#enable_movement = input ("enable movement (use it at your own risk) (y/n) ?: ")
 
 portofolio.get_historic_rates(coin)
+model = LSTM_Model()
+model.get_prediction(portofolio.df)
+
 portofolio.draw_historic_rates(coin)
 # get the current balance in USD
-portofolio.get_balance()
+portofolio.get_cash_balance()
 portofolio.get_position(coin)
-
-# store minimum order size etc
-portofolio.api_get_assets()
+corridor.draw_active_order(portofolio.fetch_active_order(coin))
 
 print ("balance on this coin is: ", portofolio.get_coin_balance(coin))
 portofolio.fetch_orders()
